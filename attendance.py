@@ -99,7 +99,6 @@ class AttendanceManager:
             return False
 
         sheet_name = self.get_sheet_name(target_date.month)
-        had_error = False
         try:
             wb = load_workbook(file_path)
             if sheet_name not in wb.sheetnames:
@@ -126,15 +125,13 @@ class AttendanceManager:
                         file_path,
                     )
                     return True
-        except Exception as exc:
-            had_error = True
-            print(f"[AttendanceManager] fill_missing_end_time error: {exc}")
-            logger.exception("fill_missing_end_time error for %s", target_date.isoformat())
-        if not had_error:
             logger.info(
                 "fill_missing_end_time skipped: missing target row for %s",
                 target_date.isoformat(),
             )
+        except Exception as exc:
+            print(f"[AttendanceManager] fill_missing_end_time error: {exc}")
+            logger.exception("fill_missing_end_time error for %s", target_date.isoformat())
         return False
 
     def find_latest_missing_end_date(self) -> Optional[date]:
