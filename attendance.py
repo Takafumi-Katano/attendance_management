@@ -245,7 +245,7 @@ class AttendanceManager:
         if sheet_name in wb.sheetnames:
             wb.active = wb.sheetnames.index(sheet_name)
         else:
-            print(f"[AttendanceManager] set_active_sheet warning: sheet not found: {sheet_name}")
+            print(f"[AttendanceManager] _set_active_sheet warning: sheet not found: {sheet_name}")
 
     @staticmethod
     def _read_data(ws) -> list:
