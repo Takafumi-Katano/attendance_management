@@ -16,10 +16,12 @@ from datetime import date, datetime
 from typing import Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
+from app_logger import get_logger
 
 HEADERS = ["日付", "始業時間", "終業時間", "労働時間"]
 DATE_FMT = "%Y/%m/%d"
 TIME_FMT = "%H:%M"
+logger = get_logger()
 
 
 class AttendanceManager:
@@ -89,12 +91,22 @@ class AttendanceManager:
         """
         file_path = self.get_file_path(target_date.year)
         if not file_path or not os.path.exists(file_path):
+            logger.info(
+                "fill_missing_end_time skipped: file not found for %s (%s)",
+                target_date.isoformat(),
+                file_path,
+            )
             return False
 
         sheet_name = self.get_sheet_name(target_date.month)
         try:
             wb = load_workbook(file_path)
             if sheet_name not in wb.sheetnames:
+                logger.info(
+                    "fill_missing_end_time skipped: sheet '%s' not found in %s",
+                    sheet_name,
+                    file_path,
+                )
                 return False
             ws = wb[sheet_name]
             data = self._read_data(ws)
@@ -107,9 +119,20 @@ class AttendanceManager:
                     self._flush(ws, data, target_date.year, target_date.month)
                     self._set_active_sheet(wb, sheet_name)
                     wb.save(file_path)
+                    logger.info(
+                        "fill_missing_end_time success: %s end=%s file=%s",
+                        date_str,
+                        end_str,
+                        file_path,
+                    )
                     return True
+            logger.info(
+                "fill_missing_end_time skipped: missing target row for %s",
+                target_date.isoformat(),
+            )
         except Exception as exc:
             print(f"[AttendanceManager] fill_missing_end_time error: {exc}")
+            logger.exception("fill_missing_end_time error for %s", target_date.isoformat())
         return False
 
     def find_latest_missing_end_date(self) -> Optional[date]:
@@ -118,11 +141,13 @@ class AttendanceManager:
         folder is not configured.
         """
         if not self.config.folder_path:
+            logger.info("find_latest_missing_end_date skipped: folder path is not configured")
             return None
 
         pattern = os.path.join(self.config.folder_path, "Attendance_Sheet_*.xlsx")
         today = datetime.now().date()
         latest: Optional[date] = None
+        logger.info("find_latest_missing_end_date scanning: pattern=%s", pattern)
 
         for file_path in glob.glob(pattern):
             try:
@@ -147,7 +172,12 @@ class AttendanceManager:
                     wb.close()
             except Exception as exc:
                 print(f"[AttendanceManager] find_latest_missing_end_date error reading {file_path}: {exc}")
+                logger.exception(
+                    "find_latest_missing_end_date error reading file: %s",
+                    file_path,
+                )
 
+        logger.info("find_latest_missing_end_date result: %s", latest.isoformat() if latest else "None")
         return latest
 
     def check_previous_day(self) -> None:
@@ -160,24 +190,43 @@ class AttendanceManager:
         """
         from windows_events import get_last_work_end_time
 
+        logger.info("check_previous_day started")
         target_date = self.find_latest_missing_end_date()
         if target_date is None:
+            logger.info("check_previous_day skipped: no missing end-date found")
             return
 
         end_time = get_last_work_end_time(target_date)
         if end_time is None:
+            logger.info(
+                "check_previous_day skipped: no candidate event time found for %s",
+                target_date.isoformat(),
+            )
             return
 
         # Only accept end times in the 12:00–23:59:59 window on the target date
         window_start = datetime(target_date.year, target_date.month, target_date.day, 12, 0)
         window_end = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59)
         if not (window_start <= end_time <= window_end):
+            logger.info(
+                "check_previous_day skipped: candidate out of window (%s not in %s - %s)",
+                end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                window_start.strftime("%Y-%m-%d %H:%M:%S"),
+                window_end.strftime("%Y-%m-%d %H:%M:%S"),
+            )
             return
 
         try:
-            self.fill_missing_end_time(target_date, end_time)
+            updated = self.fill_missing_end_time(target_date, end_time)
+            logger.info(
+                "check_previous_day finished: date=%s candidate=%s updated=%s",
+                target_date.isoformat(),
+                end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                updated,
+            )
         except Exception as exc:
             print(f"[AttendanceManager] check_previous_day error: {exc}")
+            logger.exception("check_previous_day error for %s", target_date.isoformat())
 
     # ------------------------------------------------------------------
     # Private helpers
