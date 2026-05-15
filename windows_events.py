@@ -57,7 +57,7 @@ def _run_powershell(script: str) -> List[Tuple[datetime, int]]:
             logger.warning(
                 "_run_powershell returned non-zero exit code: %s stderr=%s",
                 result.returncode,
-                result.stderr.strip(),
+                result.stderr.strip() if result.stderr else "",
             )
         events: List[Tuple[datetime, int]] = []
         for line in result.stdout.splitlines():
