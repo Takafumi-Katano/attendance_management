@@ -128,10 +128,11 @@ class AttendanceManager:
         except Exception as exc:
             print(f"[AttendanceManager] fill_missing_end_time error: {exc}")
             logger.exception("fill_missing_end_time error for %s", target_date.isoformat())
-        logger.info(
-            "fill_missing_end_time skipped: missing target row for %s",
-            target_date.isoformat(),
-        )
+        else:
+            logger.info(
+                "fill_missing_end_time skipped: missing target row for %s",
+                target_date.isoformat(),
+            )
         return False
 
     def find_latest_missing_end_date(self) -> Optional[date]:

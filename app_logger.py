@@ -10,8 +10,8 @@ _LOGGER_NAME = "attendance_management"
 _LOG_FILE = os.path.join(os.path.expanduser("~"), ".attendance_management.log")
 
 
-def get_logger(name: str = _LOGGER_NAME) -> logging.Logger:
-    logger = logging.getLogger(name)
+def get_logger() -> logging.Logger:
+    logger = logging.getLogger(_LOGGER_NAME)
     if logger.handlers:
         return logger
 
