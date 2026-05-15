@@ -17,6 +17,10 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
+from app_logger import get_logger
+
+logger = get_logger()
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -53,8 +57,10 @@ def _run_powershell(script: str) -> List[Tuple[datetime, int]]:
                     events.append((dt, eid))
                 except (ValueError, TypeError):
                     pass
+        logger.info("_run_powershell parsed events: count=%d", len(events))
         return events
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        logger.exception("_run_powershell failed")
         return []
 
 
@@ -77,7 +83,15 @@ try {{
     }}
 }} catch {{ }}
 """
-    return _run_powershell(script)
+    events = _run_powershell(script)
+    logger.info(
+        "_query_log result: log=%s ids=%s date=%s count=%d",
+        log_name,
+        event_ids,
+        target_date.isoformat(),
+        len(events),
+    )
+    return events
 
 
 def _paired_event_start(
@@ -101,7 +115,13 @@ def _paired_event_start(
         else:
             gap = (next_end - start_dt).total_seconds()
         if gap >= min_gap_seconds:
+            logger.info(
+                "_paired_event_start selected: start=%s gap_seconds=%d",
+                start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                int(gap),
+            )
             return start_dt
+    logger.info("_paired_event_start no match found")
     return None
 
 
@@ -119,10 +139,12 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
     Returns None if no qualifying event is found or when not running on Windows.
     """
     if sys.platform != "win32":
+        logger.info("get_last_work_end_time skipped: non-Windows platform")
         return None
 
     now = datetime.now()
     candidates: List[datetime] = []
+    logger.info("get_last_work_end_time started: date=%s", target_date.isoformat())
 
     # ------------------------------------------------------------------
     # (a) Hibernate / Sleep  –  System log
@@ -139,6 +161,12 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
     candidate = _paired_event_start(sleep_start_events, sleep_end_events)
     if candidate:
         candidates.append(candidate)
+    logger.info(
+        "sleep candidates: starts=%d ends=%d accepted=%s",
+        len(sleep_start_events),
+        len(sleep_end_events),
+        candidate.strftime("%Y-%m-%d %H:%M:%S") if candidate else "None",
+    )
 
     # ------------------------------------------------------------------
     # (b) Lock  –  Security log
@@ -151,6 +179,12 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
     candidate = _paired_event_start(lock_events, unlock_events)
     if candidate:
         candidates.append(candidate)
+    logger.info(
+        "lock candidates: locks=%d unlocks=%d accepted=%s",
+        len(lock_events),
+        len(unlock_events),
+        candidate.strftime("%Y-%m-%d %H:%M:%S") if candidate else "None",
+    )
 
     # ------------------------------------------------------------------
     # (c) Shutdown  –  System log
@@ -158,13 +192,22 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
     #     Event 1074 = initiated shutdown / restart
     # ------------------------------------------------------------------
     shutdown_events = _query_log("System", [6006, 1074], target_date)
+    shutdown_accepted = 0
     for shutdown_dt, _ in shutdown_events:
         if shutdown_dt.date() == target_date:
             if (now - shutdown_dt).total_seconds() >= 3 * 3600:
                 candidates.append(shutdown_dt)
+                shutdown_accepted += 1
+    logger.info("shutdown candidates accepted: %d", shutdown_accepted)
 
     if not candidates:
+        logger.info("get_last_work_end_time result: None")
         return None
 
     # Return the earliest qualifying time (most likely end-of-work)
-    return min(candidates)
+    result = min(candidates)
+    logger.info(
+        "get_last_work_end_time result: %s",
+        result.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    return result

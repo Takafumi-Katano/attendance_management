@@ -12,6 +12,7 @@ Python-based attendance management desktop application targeting **Windows 11**.
 | **Monthly total** | When all calendar days for a month are recorded, a total row is appended |
 | **Start / End buttons** | Timestamps written to Excel immediately and displayed in the window |
 | **Auto end-time** | On startup, scans all `Attendance_Sheet_*.xlsx` files across years and months to find the **latest** date with a start time but no end time, then queries Windows Event Log for a hibernate / lock / shutdown event on that date; the inferred time is written only if it falls between **12:00 and 23:59** on that date |
+| **Diagnostic log** | Startup auto-fill decisions and Windows Event lookup results are written to `~/.attendance_management.log` (rotating, up to 3 backups) for troubleshooting |
 | **Persistent folder** | Selected folder saved to `~/.attendance_config.json`; shown as `Empty` on first use |
 
 ## Requirements
@@ -57,6 +58,13 @@ The entry point is `dist\attendance_management\attendance_management.exe`.
 2. Click **始業** when you start work — the time is written to Excel immediately.
 3. Click **終業** when you finish work — the time and calculated work time are written to Excel.
 4. Click **Excelを開く** to open the current month's file directly.
+
+### Troubleshooting auto end-time
+
+When auto end-time does not fill as expected, check:
+
+- `~/.attendance_management.log`
+- Latest lines around app startup (`check_previous_day`, `get_last_work_end_time`)
 
 ## File layout
 

@@ -20,8 +20,11 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox
 
+from app_logger import get_logger
 from config import Config
 from attendance import AttendanceManager
+
+logger = get_logger()
 
 # ---------------------------------------------------------------------------
 # Main application class
@@ -192,6 +195,7 @@ class AttendanceApp:
             self.manager.check_previous_day()
         except Exception as exc:
             print(f"[AttendanceApp] previous day check error: {exc}")
+            logger.exception("[AttendanceApp] previous day check error")
 
     # ------------------------------------------------------------------
     # Button callbacks
