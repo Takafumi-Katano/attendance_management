@@ -30,10 +30,17 @@ def _run_powershell(script: str) -> List[Tuple[datetime, int]]:
     """Execute *script* in PowerShell and parse 'YYYY-MM-DD HH:MM:SS,<ID>' lines."""
     if sys.platform != "win32":
         return []
+    creationflags = 0
+    startupinfo = None
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags |= subprocess.CREATE_NO_WINDOW
+    if hasattr(subprocess, "STARTUPINFO") and hasattr(subprocess, "STARTF_USESHOWWINDOW"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     try:
         result = subprocess.run(
             [
-                "powershell",
+                "powershell.exe",
                 "-NonInteractive",
                 "-NoProfile",
                 "-Command",
@@ -43,7 +50,15 @@ def _run_powershell(script: str) -> List[Tuple[datetime, int]]:
             text=True,
             timeout=30,
             encoding="utf-8",
+            creationflags=creationflags,
+            startupinfo=startupinfo,
         )
+        if result.returncode != 0:
+            logger.warning(
+                "_run_powershell returned non-zero exit code: %s stderr=%s",
+                result.returncode,
+                result.stderr.strip(),
+            )
         events: List[Tuple[datetime, int]] = []
         for line in result.stdout.splitlines():
             line = line.strip()
