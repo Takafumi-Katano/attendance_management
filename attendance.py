@@ -105,6 +105,7 @@ class AttendanceManager:
                     row[2] = end_str
                     row[3] = self._calc_work_time(row[1], end_str)
                     self._flush(ws, data, target_date.year, target_date.month)
+                    self._set_active_sheet(wb, sheet_name)
                     wb.save(file_path)
                     return True
         except Exception as exc:
@@ -214,6 +215,7 @@ class AttendanceManager:
         target_row[3] = self._calc_work_time(target_row[1], target_row[2])
 
         self._flush(ws, data, dt.year, dt.month)
+        self._set_active_sheet(wb, sheet_name)
         wb.save(file_path)
         return time_str
 
@@ -237,6 +239,13 @@ class AttendanceManager:
         ws.column_dimensions["C"].width = 12
         ws.column_dimensions["D"].width = 12
         return ws
+
+    @staticmethod
+    def _set_active_sheet(wb: Workbook, sheet_name: str) -> None:
+        if sheet_name in wb.sheetnames:
+            wb.active = wb.sheetnames.index(sheet_name)
+        else:
+            print(f"[AttendanceManager] _set_active_sheet warning: sheet not found: {sheet_name}")
 
     @staticmethod
     def _read_data(ws) -> list:
