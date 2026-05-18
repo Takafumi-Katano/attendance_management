@@ -16,6 +16,7 @@ class Config:
 
     def __init__(self) -> None:
         self.folder_path: str | None = None
+        self.last_used_year: int | None = None
         self._load()
 
     # ------------------------------------------------------------------
@@ -25,7 +26,14 @@ class Config:
     def save(self) -> None:
         """Persist current configuration to disk."""
         with open(_CONFIG_FILE, "w", encoding="utf-8") as fh:
-            json.dump({"folder_path": self.folder_path}, fh, ensure_ascii=False)
+            json.dump(
+                {
+                    "folder_path": self.folder_path,
+                    "last_used_year": self.last_used_year,
+                },
+                fh,
+                ensure_ascii=False,
+            )
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -39,5 +47,7 @@ class Config:
             with open(_CONFIG_FILE, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
             self.folder_path = data.get("folder_path")
-        except (json.JSONDecodeError, OSError):
+            year = data.get("last_used_year")
+            self.last_used_year = int(year) if year is not None else None
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
             pass

@@ -41,6 +41,7 @@ class AttendanceApp:
         self.manager = AttendanceManager(self.config)
 
         self._build_ui()
+        self._handle_year_rollover_on_startup()
         self._load_today_times()
         self._update_clock()
         # Run previous-day check in a background thread so the window opens immediately
@@ -197,6 +198,39 @@ class AttendanceApp:
             print(f"[AttendanceApp] previous day check error: {exc}")
             logger.exception("[AttendanceApp] previous day check error")
 
+    def _handle_year_rollover_on_startup(self) -> None:
+        """On first launch after year change, auto-switch to new year file and notify."""
+        current_year = datetime.now().year
+        previous_year = self.config.last_used_year
+
+        if previous_year is None:
+            self.config.last_used_year = current_year
+            self.config.save()
+            return
+
+        if previous_year == current_year:
+            return
+
+        file_path = self.manager.ensure_file_exists(current_year)
+        self.config.last_used_year = current_year
+        self.config.save()
+
+        if not file_path:
+            return
+        self.filename_var.set(self._filename_display())
+
+        def notify_and_open() -> None:
+            messagebox.showinfo(
+                "情報",
+                (
+                    "年が変わったため、勤怠Excelファイルを自動更新しました。\n"
+                    f"新しいファイル: {os.path.basename(file_path)}"
+                ),
+            )
+            self._open_file_path(file_path)
+
+        self.root.after(0, notify_and_open)
+
     # ------------------------------------------------------------------
     # Button callbacks
     # ------------------------------------------------------------------
@@ -227,6 +261,10 @@ class AttendanceApp:
                 "始業ボタンを押すとファイルが作成されます。",
             )
             return
+        self._open_file_path(file_path)
+
+    @staticmethod
+    def _open_file_path(file_path: str) -> None:
         try:
             if sys.platform == "win32":
                 os.startfile(file_path)  # type: ignore[attr-defined]

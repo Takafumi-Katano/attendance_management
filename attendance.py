@@ -51,6 +51,27 @@ class AttendanceManager:
             month = datetime.now().month
         return datetime(2000, month, 1).strftime("%b")
 
+    def ensure_file_exists(self, year: Optional[int] = None) -> Optional[str]:
+        """Ensure the yearly attendance file exists and return its path."""
+        file_path = self.get_file_path(year)
+        if not file_path:
+            return None
+        if os.path.exists(file_path):
+            return file_path
+
+        target_year = year if year is not None else datetime.now().year
+        now = datetime.now()
+        # For non-current years, create Jan sheet as an initial placeholder.
+        target_month = now.month if target_year == now.year else 1
+        sheet_name = self.get_sheet_name(target_month)
+
+        wb = self._open_or_create_workbook(file_path)
+        self._open_or_create_sheet(wb, sheet_name)
+        self._set_active_sheet(wb, sheet_name)
+        wb.save(file_path)
+        wb.close()
+        return file_path
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
