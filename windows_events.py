@@ -201,6 +201,8 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
         lock_candidate.strftime("%Y-%m-%d %H:%M:%S") if lock_candidate else "None",
     )
 
+    # Requirement update: once a 3+ hour lock is found on the target date, use the
+    # lock timestamp as end-of-work with higher priority than other event types.
     if lock_candidate:
         logger.info(
             "get_last_work_end_time result: %s (lock priority)",

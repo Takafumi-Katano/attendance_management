@@ -103,7 +103,7 @@ class AttendanceManager:
                     if row[0] and "合計" in str(row[0]):
                         continue
                     row_date = self._normalize_date_cell(row[0])
-                    if row_date == date_str:
+                    if row_date and row_date == date_str:
                         return self._normalize_time_cell(row[1]), self._normalize_time_cell(row[2])
             finally:
                 wb.close()
@@ -146,6 +146,7 @@ class AttendanceManager:
                         logger.info("fill_missing_end_time updating: date=%s end=%s", date_str, end_str)
                         row[2] = end_str
                         self._flush(ws, data, target_date.year, target_date.month)
+                        logger.info("fill_missing_end_time recalculated work-time using sheet formulas")
                         self._set_active_sheet(wb, sheet_name)
                         wb.save(file_path)
                         logger.info(
@@ -231,6 +232,8 @@ class AttendanceManager:
             )
             return
 
+        # Requirement update: treat qualifying lock-time events as end-of-work even
+        # when the lock spans overnight, so only the date must match here.
         if end_time.date() != target_date:
             logger.info(
                 "check_previous_day skipped: candidate out of date (%s not on %s)",
@@ -386,6 +389,8 @@ class AttendanceManager:
 
     @staticmethod
     def _work_time_formula(row_num: int) -> str:
+        # Handle both numeric time cells and text time cells, including overnight
+        # spans via MOD(), then apply a 1-hour break deduction when over 6 hours.
         b = f"B{row_num}"
         c = f"C{row_num}"
         diff = (
@@ -394,7 +399,7 @@ class AttendanceManager:
         )
         return (
             f'=IF(OR({b}="",{c}=""),"",'
-            f"MOD({diff},1)-IF(MOD({diff},1)*24>6,1/24,0))"
+            f"IFERROR(MOD({diff},1)-IF(MOD({diff},1)*24>6,1/24,0),\"\"))"
         )
 
     def _flush(self, ws, data: list, year: int, month: int) -> None:
@@ -411,8 +416,8 @@ class AttendanceManager:
             ws.cell(row=idx, column=1, value=row[0])
             ws.cell(row=idx, column=2, value=row[1])
             ws.cell(row=idx, column=3, value=row[2])
-            d_cell = ws.cell(row=idx, column=4, value=self._work_time_formula(idx))
-            d_cell.number_format = "[h]:mm"
+            work_time_cell = ws.cell(row=idx, column=4, value=self._work_time_formula(idx))
+            work_time_cell.number_format = "[h]:mm"
             ws.cell(row=idx, column=1).number_format = "yyyy/mm/dd"
             ws.cell(row=idx, column=2).number_format = "hh:mm"
             ws.cell(row=idx, column=3).number_format = "hh:mm"
