@@ -12,7 +12,7 @@ Handles:
 import calendar
 import glob
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
@@ -94,15 +94,22 @@ class AttendanceManager:
         sheet_name = self.get_sheet_name(now.month)
         try:
             wb = load_workbook(file_path, data_only=True)
-            if sheet_name not in wb.sheetnames:
-                return None, None
-            ws = wb[sheet_name]
-            date_str = now.strftime(DATE_FMT)
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if row[0] == date_str:
-                    return row[1], row[2]
+            try:
+                if sheet_name not in wb.sheetnames:
+                    return None, None
+                ws = wb[sheet_name]
+                date_str = now.strftime(DATE_FMT)
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if row[0] and "合計" in str(row[0]):
+                        continue
+                    row_date = self._normalize_date_cell(row[0])
+                    if row_date and row_date == date_str:
+                        return self._normalize_time_cell(row[1]), self._normalize_time_cell(row[2])
+            finally:
+                wb.close()
         except Exception as exc:
             print(f"[AttendanceManager] get_today_times error: {exc}")
+            logger.exception("get_today_times error")
         return None, None
 
     def fill_missing_end_time(self, target_date: date, end_dt: datetime) -> bool:
@@ -122,35 +129,39 @@ class AttendanceManager:
         sheet_name = self.get_sheet_name(target_date.month)
         try:
             wb = load_workbook(file_path)
-            if sheet_name not in wb.sheetnames:
-                logger.info(
-                    "fill_missing_end_time skipped: sheet '%s' not found in %s",
-                    sheet_name,
-                    file_path,
-                )
-                return False
-            ws = wb[sheet_name]
-            data = self._read_data(ws)
-            date_str = target_date.strftime(DATE_FMT)
-            for row in data:
-                if row[0] == date_str and row[1] and not row[2]:
-                    end_str = end_dt.strftime(TIME_FMT)
-                    row[2] = end_str
-                    row[3] = self._calc_work_time(row[1], end_str)
-                    self._flush(ws, data, target_date.year, target_date.month)
-                    self._set_active_sheet(wb, sheet_name)
-                    wb.save(file_path)
+            try:
+                if sheet_name not in wb.sheetnames:
                     logger.info(
-                        "fill_missing_end_time success: %s end=%s file=%s",
-                        date_str,
-                        end_str,
+                        "fill_missing_end_time skipped: sheet '%s' not found in %s",
+                        sheet_name,
                         file_path,
                     )
-                    return True
-            logger.info(
-                "fill_missing_end_time skipped: missing target row for %s",
-                target_date.isoformat(),
-            )
+                    return False
+                ws = wb[sheet_name]
+                data = self._read_data(ws)
+                date_str = target_date.strftime(DATE_FMT)
+                for row in data:
+                    if row[0] == date_str and row[1] and not row[2]:
+                        end_str = end_dt.strftime(TIME_FMT)
+                        logger.info("fill_missing_end_time updating: date=%s end=%s", date_str, end_str)
+                        row[2] = end_str
+                        self._flush(ws, data, target_date.year, target_date.month)
+                        logger.info("fill_missing_end_time recalculated work-time using sheet formulas")
+                        self._set_active_sheet(wb, sheet_name)
+                        wb.save(file_path)
+                        logger.info(
+                            "fill_missing_end_time success: %s end=%s file=%s",
+                            date_str,
+                            end_str,
+                            file_path,
+                        )
+                        return True
+                logger.info(
+                    "fill_missing_end_time skipped: missing target row for %s",
+                    target_date.isoformat(),
+                )
+            finally:
+                wb.close()
         except Exception as exc:
             print(f"[AttendanceManager] fill_missing_end_time error: {exc}")
             logger.exception("fill_missing_end_time error for %s", target_date.isoformat())
@@ -179,14 +190,11 @@ class AttendanceManager:
                         for row in ws.iter_rows(min_row=2, values_only=True):
                             if row[0] and "合計" in str(row[0]):
                                 continue
-                            date_val = row[0]
-                            start_val = row[1]
-                            end_val = row[2]
+                            date_val = self._normalize_date_cell(row[0])
+                            start_val = self._normalize_time_cell(row[1])
+                            end_val = self._normalize_time_cell(row[2])
                             if date_val and start_val and not end_val:
-                                try:
-                                    d = datetime.strptime(str(date_val).strip(), DATE_FMT).date()
-                                except ValueError:
-                                    continue
+                                d = datetime.strptime(date_val, DATE_FMT).date()
                                 if d < today and (latest is None or d > latest):
                                     latest = d
                 finally:
@@ -206,8 +214,7 @@ class AttendanceManager:
         from Windows Event Log.
 
         Search covers all Attendance_Sheet_*.xlsx files so year/month boundaries
-        are handled correctly.  The inferred end time is only accepted if it falls
-        within 12:00–23:59 on the target date.
+        are handled correctly.
         """
         from windows_events import get_last_work_end_time
 
@@ -225,15 +232,13 @@ class AttendanceManager:
             )
             return
 
-        # Only accept end times in the 12:00–23:59:59 window on the target date
-        window_start = datetime(target_date.year, target_date.month, target_date.day, 12, 0)
-        window_end = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59)
-        if not (window_start <= end_time <= window_end):
+        # Requirement update: treat qualifying lock-time events as end-of-work even
+        # when the lock spans overnight, so only the date must match here.
+        if end_time.date() != target_date:
             logger.info(
-                "check_previous_day skipped: candidate out of window (%s not in %s - %s)",
+                "check_previous_day skipped: candidate out of date (%s not on %s)",
                 end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                window_start.strftime("%Y-%m-%d %H:%M:%S"),
-                window_end.strftime("%Y-%m-%d %H:%M:%S"),
+                target_date.isoformat(),
             )
             return
 
@@ -256,6 +261,7 @@ class AttendanceManager:
     def _write_time(self, dt: datetime, column: int) -> Optional[str]:
         """Internal: write start (column=1) or end (column=2) time."""
         if not self.config.folder_path:
+            logger.info("_write_time skipped: folder path not configured")
             return None
 
         file_path = self.get_file_path(dt.year)
@@ -278,15 +284,21 @@ class AttendanceManager:
         if target_row is None:
             target_row = [date_str, None, None, None]
             data.append(target_row)
+            logger.info("_write_time created new row: date=%s", date_str)
 
         target_row[column] = time_str
-
-        # Recalculate work time whenever start or end changes
-        target_row[3] = self._calc_work_time(target_row[1], target_row[2])
+        logger.info(
+            "_write_time updated: date=%s column=%s value=%s",
+            date_str,
+            "start" if column == 1 else "end",
+            time_str,
+        )
 
         self._flush(ws, data, dt.year, dt.month)
         self._set_active_sheet(wb, sheet_name)
         wb.save(file_path)
+        wb.close()
+        logger.info("_write_time saved: file=%s sheet=%s", file_path, sheet_name)
         return time_str
 
     @staticmethod
@@ -308,6 +320,10 @@ class AttendanceManager:
         ws.column_dimensions["B"].width = 12
         ws.column_dimensions["C"].width = 12
         ws.column_dimensions["D"].width = 12
+        ws["A1"].number_format = "yyyy/mm/dd"
+        ws["B1"].number_format = "hh:mm"
+        ws["C1"].number_format = "hh:mm"
+        ws["D1"].number_format = "[h]:mm"
         return ws
 
     @staticmethod
@@ -317,47 +333,74 @@ class AttendanceManager:
         else:
             print(f"[AttendanceManager] _set_active_sheet warning: sheet not found: {sheet_name}")
 
-    @staticmethod
-    def _read_data(ws) -> list:
+    def _read_data(self, ws) -> list:
         """Read data rows (skip header and total rows) as a list of lists."""
         rows = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[0] and "合計" not in str(row[0]):
-                rows.append(list(row))
+                date_str = self._normalize_date_cell(row[0])
+                if not date_str:
+                    continue
+                rows.append(
+                    [
+                        date_str,
+                        self._normalize_time_cell(row[1]),
+                        self._normalize_time_cell(row[2]),
+                        None,
+                    ]
+                )
         return rows
 
     @staticmethod
-    def _calc_work_time(start_str: Optional[str], end_str: Optional[str]) -> Optional[str]:
-        """Return work time as 'HH:MM', applying 1-hour break when > 6 hours."""
-        if not start_str or not end_str:
+    def _normalize_date_cell(value) -> Optional[str]:
+        if value is None:
             return None
-        try:
-            fmt = "%H:%M"
-            start = datetime.strptime(str(start_str).strip(), fmt)
-            end = datetime.strptime(str(end_str).strip(), fmt)
-            minutes = (end - start).total_seconds() / 60
-            if minutes <= 0:
-                minutes += 24 * 60  # midnight crossing
-            if minutes > 360:  # > 6 hours → deduct 1-hour break
-                minutes -= 60
-            h, m = divmod(int(minutes), 60)
-            return f"{h:02d}:{m:02d}"
-        except (ValueError, TypeError):
+        if isinstance(value, datetime):
+            return value.strftime(DATE_FMT)
+        if isinstance(value, date):
+            return value.strftime(DATE_FMT)
+        text = str(value).strip()
+        if not text:
             return None
+        for fmt in (DATE_FMT, "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt).strftime(DATE_FMT)
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
-    def _calc_total_time(data: list) -> str:
-        """Sum all work times and return 'HH:MM'."""
-        total_minutes = 0
-        for row in data:
-            if row[3]:
-                parts = str(row[3]).split(":")
-                try:
-                    total_minutes += int(parts[0]) * 60 + int(parts[1])
-                except (ValueError, IndexError):
-                    pass
-        h, m = divmod(total_minutes, 60)
-        return f"{h:02d}:{m:02d}"
+    def _normalize_time_cell(value) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.strftime(TIME_FMT)
+        if isinstance(value, time):
+            return value.strftime(TIME_FMT)
+        text = str(value).strip()
+        if not text:
+            return None
+        for fmt in (TIME_FMT, "%H:%M:%S"):
+            try:
+                return datetime.strptime(text, fmt).strftime(TIME_FMT)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _work_time_formula(row_num: int) -> str:
+        # Handle both numeric time cells and text time cells, including overnight
+        # spans via MOD(), then apply a 1-hour break deduction when over 6 hours.
+        b = f"B{row_num}"
+        c = f"C{row_num}"
+        diff = (
+            f"(IF(ISNUMBER({c}),{c},TIMEVALUE({c}))"
+            f"-IF(ISNUMBER({b}),{b},TIMEVALUE({b})))"
+        )
+        return (
+            f'=IF(OR({b}="",{c}=""),"",'
+            f"IFERROR(MOD({diff},1)-IF(MOD({diff},1)*24>6,1/24,0),\"\"))"
+        )
 
     def _flush(self, ws, data: list, year: int, month: int) -> None:
         """Write sorted data back to *ws*, adding a total row if month is full."""
@@ -369,11 +412,20 @@ class AttendanceManager:
             ws.delete_rows(2, ws.max_row - 1)
 
         # Write sorted data
-        for row in data:
-            ws.append(row)
+        for idx, row in enumerate(data, start=2):
+            ws.cell(row=idx, column=1, value=row[0])
+            ws.cell(row=idx, column=2, value=row[1])
+            ws.cell(row=idx, column=3, value=row[2])
+            work_time_cell = ws.cell(row=idx, column=4, value=self._work_time_formula(idx))
+            work_time_cell.number_format = "[h]:mm"
+            ws.cell(row=idx, column=1).number_format = "yyyy/mm/dd"
+            ws.cell(row=idx, column=2).number_format = "hh:mm"
+            ws.cell(row=idx, column=3).number_format = "hh:mm"
 
         # Add total row if every calendar day in the month has a record
         last_day = calendar.monthrange(year, month)[1]
         if len(data) == last_day:
-            total = self._calc_total_time(data)
-            ws.append(["合計", "", "", total])
+            total_row = len(data) + 2
+            ws.cell(row=total_row, column=1, value="合計")
+            ws.cell(row=total_row, column=4, value=f"=SUM(D2:D{total_row - 1})")
+            ws.cell(row=total_row, column=4).number_format = "[h]:mm"
