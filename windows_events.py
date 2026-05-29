@@ -191,15 +191,22 @@ def get_last_work_end_time(target_date: date) -> Optional[datetime]:
     lock_events = _query_log("Security", [4800], target_date)
     unlock_events = _query_log("Security", [4801], target_date)
     lock_events = [(dt, eid) for dt, eid in lock_events if dt.date() == target_date]
-    candidate = _paired_event_start(lock_events, unlock_events)
-    if candidate:
-        candidates.append(candidate)
+    lock_candidate = _paired_event_start(lock_events, unlock_events)
+    if lock_candidate:
+        candidates.append(lock_candidate)
     logger.info(
         "lock candidates: locks=%d unlocks=%d accepted=%s",
         len(lock_events),
         len(unlock_events),
-        candidate.strftime("%Y-%m-%d %H:%M:%S") if candidate else "None",
+        lock_candidate.strftime("%Y-%m-%d %H:%M:%S") if lock_candidate else "None",
     )
+
+    if lock_candidate:
+        logger.info(
+            "get_last_work_end_time result: %s (lock priority)",
+            lock_candidate.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        return lock_candidate
 
     # ------------------------------------------------------------------
     # (c) Shutdown  –  System log
