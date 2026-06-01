@@ -17,7 +17,7 @@ Python-based attendance management desktop application targeting **Windows 11**.
 
 ## Requirements
 
-- Python 3.10 or later
+- Python 3.9 or later
 - Windows 11 (the Windows Event Log feature requires Windows; all other features work cross-platform)
 
 ## Installation
