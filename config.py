@@ -7,6 +7,7 @@ across sessions but is never committed to the repository.
 
 import json
 import os
+from typing import Optional
 
 _CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".attendance_config.json")
 
@@ -15,8 +16,8 @@ class Config:
     """Manages persistent configuration for the attendance management app."""
 
     def __init__(self) -> None:
-        self.folder_path: str | None = None
-        self.last_used_year: int | None = None
+        self.folder_path: Optional[str] = None
+        self.last_used_year: Optional[int] = None
         self._load()
 
     # ------------------------------------------------------------------

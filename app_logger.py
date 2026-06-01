@@ -5,13 +5,14 @@ app_logger.py – Shared file logger for attendance management diagnostics.
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from typing import Optional
 
 _LOGGER_NAME = "attendance_management"
 _DEFAULT_LOG_FILE = os.path.join(os.path.expanduser("~"), ".attendance_management.log")
 _LOG_FILE = _DEFAULT_LOG_FILE
 
 
-def _build_log_file_path(folder_path: str | None) -> str:
+def _build_log_file_path(folder_path: Optional[str]) -> str:
     if folder_path and os.path.isdir(folder_path):
         return os.path.join(folder_path, "attendance_management.log")
     return _DEFAULT_LOG_FILE
@@ -39,7 +40,7 @@ def get_logger() -> logging.Logger:
     return logger
 
 
-def set_log_directory(folder_path: str | None) -> str:
+def set_log_directory(folder_path: Optional[str]) -> str:
     global _LOG_FILE
     _LOG_FILE = _build_log_file_path(folder_path)
     get_logger()
