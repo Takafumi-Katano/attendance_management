@@ -97,7 +97,19 @@ class TaskSessionManager:
         sessions = self._sessions.get(date_str, [])
         durations: Dict[str, float] = {}
         for s in sessions:
-            dur = self._calc_duration_days(s["start"], s["end"])
+            try:
+                dur = self._calc_duration_days(s["start"], s["end"])
+            except (ValueError, KeyError) as exc:
+                logger.warning(
+                    "task_session duration calculation error: "
+                    "date=%s task=%s start=%s end=%s: %s",
+                    date_str,
+                    s.get("task"),
+                    s.get("start"),
+                    s.get("end"),
+                    exc,
+                )
+                continue
             task = s["task"]
             durations[task] = durations.get(task, 0.0) + dur
         return durations
@@ -145,8 +157,8 @@ class TaskSessionManager:
         """
         start = datetime.strptime(start_str, TIME_FMT)
         end = datetime.strptime(end_str, TIME_FMT)
-        if end <= start:
-            # Treat as zero-length session (same minute or clock goes backward)
+        if end < start:
+            # end-time is before start-time: treat as zero-length session
             return 0.0
 
         diff = end - start

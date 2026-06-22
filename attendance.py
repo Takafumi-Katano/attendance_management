@@ -446,12 +446,19 @@ class AttendanceManager:
                 ws.cell(row=1, column=col, value=task)
                 ws.column_dimensions[col_letter].width = 12
 
+            # Pre-compute task durations for all data rows (avoids repeated calls)
+            date_durations = {
+                row[0]: self.task_session_manager.get_task_durations_for_date(row[0])
+                for row in data
+                if row[0]
+            }
+
             # Write task duration data for each date row
             for data_idx, row in enumerate(data, start=2):
                 date_str = row[0]
                 if not date_str:
                     continue
-                durations = self.task_session_manager.get_task_durations_for_date(date_str)
+                durations = date_durations.get(date_str, {})
                 for task, col in task_col_map.items():
                     dur = durations.get(task, 0.0)
                     if dur > 0.0:
