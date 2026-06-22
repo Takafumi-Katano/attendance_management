@@ -13,7 +13,7 @@ import calendar
 import glob
 import os
 from datetime import date, datetime, time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -431,7 +431,7 @@ class AttendanceManager:
             ws.cell(row=1, column=col_idx).value = None
             col_idx += 1
 
-        tasks_for_month: list = []
+        tasks_for_month: List[str] = []
         if self.task_session_manager is not None:
             tasks_for_month = self.task_session_manager.get_first_occurrence_for_month(
                 year, month

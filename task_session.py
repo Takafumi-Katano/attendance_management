@@ -138,6 +138,10 @@ class TaskSessionManager:
     def _calc_duration_days(start_str: str, end_str: str) -> float:
         """Compute the duration from *start_str* to *end_str* as an Excel day
         fraction, applying the lunch-break deduction when applicable.
+
+        The requirement specifies that 1 hour is deducted when the entire
+        12:30–13:30 window is *contained within* the session (i.e. the session
+        spans at least from 12:30 to 13:30).
         """
         start = datetime.strptime(start_str, TIME_FMT)
         end = datetime.strptime(end_str, TIME_FMT)
@@ -147,10 +151,11 @@ class TaskSessionManager:
 
         diff = end - start
 
-        # Deduct 1 hour if the lunch window [12:30, 13:30) overlaps [start, end)
+        # Deduct 1 hour only when the full 12:30–13:30 lunch window is contained
+        # within [start, end] (i.e. start <= 12:30 AND end >= 13:30).
         lunch_start = datetime.strptime(_LUNCH_START, TIME_FMT)
         lunch_end = datetime.strptime(_LUNCH_END, TIME_FMT)
-        if start < lunch_end and end > lunch_start:
+        if start <= lunch_start and end >= lunch_end:
             diff -= timedelta(hours=1)
 
         total_seconds = max(0.0, diff.total_seconds())

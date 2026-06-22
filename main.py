@@ -488,6 +488,12 @@ class AttendanceApp:
         draw.line([(cx, cy), (mx, my)], fill="white", width=2)
         return img
 
+    def _tray_task_callback(self, task_name: str):
+        """Return a pystray-compatible callback that starts *task_name*."""
+        def callback(_icon, _item) -> None:
+            self.root.after(0, lambda: self._start_task_by_name(task_name))
+        return callback
+
     def _build_tray_menu(self):
         """Build a pystray Menu reflecting the current task list."""
         import pystray
@@ -495,12 +501,7 @@ class AttendanceApp:
         tasks = self.task_config.tasks
         if tasks:
             task_items = tuple(
-                pystray.MenuItem(
-                    task,
-                    lambda _icon, _item, t=task: self.root.after(
-                        0, lambda: self._start_task_by_name(t)
-                    ),
-                )
+                pystray.MenuItem(task, self._tray_task_callback(task))
                 for task in tasks
             )
             task_submenu = pystray.Menu(*task_items)
