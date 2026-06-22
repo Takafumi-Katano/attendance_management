@@ -10,6 +10,8 @@ Layout
   ── separator ──
   Row 5: [始業時刻 label]  [recorded start time]  [始業 button]
   Row 6: [終業時刻 label]  [recorded end time]    [終業 button]
+  ── separator ──
+  Row 8: [業務 label] [task dropdown] [作業開始 button]
 """
 
 import os
@@ -18,11 +20,13 @@ import sys
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from app_logger import get_log_path, get_logger, set_log_directory
 from config import Config
 from attendance import AttendanceManager
+from task_config import TaskConfig
+from task_session import TaskSessionManager
 
 logger = get_logger()
 
@@ -40,7 +44,10 @@ class AttendanceApp:
         self.config = Config()
         log_path = set_log_directory(self.config.folder_path)
         logger.info("application started: log_path=%s", log_path)
-        self.manager = AttendanceManager(self.config)
+
+        self.task_config = TaskConfig(self.config.folder_path)
+        self.task_session_manager = TaskSessionManager(self.config.folder_path)
+        self.manager = AttendanceManager(self.config, self.task_session_manager)
 
         self._build_ui()
         self._handle_year_rollover_on_startup()
@@ -48,6 +55,13 @@ class AttendanceApp:
         self._update_clock()
         # Run previous-day check in a background thread so the window opens immediately
         threading.Thread(target=self._check_previous_day, daemon=True).start()
+
+        # System tray (best-effort; ignored if pystray/Pillow not available)
+        self.tray_icon = None
+        self._start_tray()
+
+        # Hide window on close → keep residing in the system tray
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -173,8 +187,49 @@ class AttendanceApp:
             command=self._record_end,
         ).grid(row=6, column=2, **pad)
 
+        # ── Separator ────────────────────────────────────────────────────
+        tk.Frame(self.root, height=2, bd=1, relief="sunken").grid(
+            row=7, column=0, columnspan=5, sticky="ew", padx=8, pady=2
+        )
+
+        # ── Row 8 : Task selection ───────────────────────────────────────
+        tk.Label(self.root, text="業務:", anchor="e").grid(
+            row=8, column=0, sticky="e", **pad
+        )
+        self.task_var = tk.StringVar()
+        self.task_combo = ttk.Combobox(
+            self.root,
+            textvariable=self.task_var,
+            state="readonly",
+            width=30,
+        )
+        self.task_combo.grid(row=8, column=1, columnspan=2, sticky="ew", **pad)
+        tk.Button(
+            self.root,
+            text="作業開始",
+            width=10,
+            bg="#1565C0",
+            fg="white",
+            activebackground="#0D47A1",
+            font=("", 11, "bold"),
+            command=self._start_task,
+        ).grid(row=8, column=3, **pad)
+
+        # ── Row 9 : Active task status label ─────────────────────────────
+        self.active_task_var = tk.StringVar(value="")
+        tk.Label(
+            self.root,
+            textvariable=self.active_task_var,
+            fg="#555555",
+            font=("", 9),
+            anchor="w",
+        ).grid(row=9, column=0, columnspan=5, sticky="w", padx=10, pady=2)
+
         # Extra padding at the bottom
-        tk.Label(self.root, text="").grid(row=7, column=0)
+        tk.Label(self.root, text="").grid(row=10, column=0)
+
+        # Populate the task dropdown
+        self._update_task_dropdown()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -184,6 +239,21 @@ class AttendanceApp:
         if not self.config.folder_path:
             return "Empty"
         return f"Attendance_Sheet_{datetime.now().year}.xlsx"
+
+    def _update_task_dropdown(self) -> None:
+        """Reload task list from config and refresh the Combobox."""
+        tasks = self.task_config.tasks
+        self.task_combo["values"] = tasks
+        if tasks and not self.task_var.get():
+            self.task_combo.current(0)
+        elif not tasks:
+            self.task_var.set("")
+        # Reflect currently active task in the status label
+        active = self.task_session_manager.active_task
+        if active:
+            self.active_task_var.set(f"実施中: {active}")
+        else:
+            self.active_task_var.set("")
 
     def _update_clock(self) -> None:
         self.current_time_var.set(datetime.now().strftime("%H:%M:%S"))
@@ -258,6 +328,12 @@ class AttendanceApp:
         log_path = set_log_directory(path)
         self.folder_var.set(path)
         self.filename_var.set(self._filename_display())
+        # Reload task config and session manager for the new folder
+        self.task_config.load(path)
+        self.task_session_manager.set_folder_path(path)
+        self._update_task_dropdown()
+        # Restart the tray so its task submenu reflects the new task list
+        self._restart_tray()
         logger.info("folder selected: %s log_path=%s", path, log_path)
 
     def _open_file(self) -> None:
@@ -322,6 +398,9 @@ class AttendanceApp:
             return
         now = datetime.now()
         logger.info("record end requested: dt=%s", now.strftime("%Y-%m-%d %H:%M:%S"))
+        # Close the active task session before writing end time to Excel
+        self.task_session_manager.end_current_task(now)
+        self.active_task_var.set("")
         result = self.manager.record_end(now)
         if result:
             self.end_time_var.set(result)
@@ -330,6 +409,157 @@ class AttendanceApp:
         else:
             logger.error("record end failed")
             messagebox.showerror("エラー", "終業時刻の記録に失敗しました。")
+
+    def _start_task(self) -> None:
+        """Begin the selected task (called by the 作業開始 button)."""
+        if not self.config.folder_path:
+            messagebox.showwarning("警告", "保存先フォルダを選択してください。")
+            return
+        task_name = self.task_var.get().strip()
+        if not task_name:
+            messagebox.showwarning("警告", "業務を選択してください。")
+            return
+        now = datetime.now()
+        logger.info(
+            "start_task: task=%s dt=%s", task_name, now.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        self.task_session_manager.start_task(task_name, now)
+        self.active_task_var.set(f"実施中: {task_name}")
+        logger.info("start_task success: task=%s", task_name)
+
+    def _start_task_by_name(self, task_name: str) -> None:
+        """Begin *task_name* – called from the system tray submenu."""
+        if not self.config.folder_path:
+            return
+        now = datetime.now()
+        logger.info(
+            "start_task_by_name (tray): task=%s dt=%s",
+            task_name,
+            now.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        self.task_session_manager.start_task(task_name, now)
+        self.active_task_var.set(f"実施中: {task_name}")
+
+    # ------------------------------------------------------------------
+    # Window lifecycle
+    # ------------------------------------------------------------------
+
+    def _on_window_close(self) -> None:
+        """Hide the main window to the system tray instead of destroying it."""
+        self.root.withdraw()
+
+    def _show_window(self) -> None:
+        """Restore and focus the main window."""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _quit_app(self) -> None:
+        """Fully exit the application (called from the tray menu)."""
+        logger.info("quit_app called")
+        if self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self.root.after(0, self.root.destroy)
+
+    # ------------------------------------------------------------------
+    # System tray
+    # ------------------------------------------------------------------
+
+    def _create_tray_icon_image(self):
+        """Return a simple 64×64 PIL image for the system tray icon."""
+        import math
+        from PIL import Image, ImageDraw
+
+        size = 64
+        img = Image.new("RGB", (size, size), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        # Green circle
+        draw.ellipse([4, 4, 60, 60], fill=(56, 142, 60), outline=(255, 255, 255), width=2)
+        # Clock hands (decorative)
+        cx, cy, r = 32, 32, 20
+        hx = cx + int(r * 0.5 * math.sin(math.radians(60)))
+        hy = cy - int(r * 0.5 * math.cos(math.radians(60)))
+        draw.line([(cx, cy), (hx, hy)], fill="white", width=3)
+        mx = cx + int(r * math.sin(math.radians(120)))
+        my = cy - int(r * math.cos(math.radians(120)))
+        draw.line([(cx, cy), (mx, my)], fill="white", width=2)
+        return img
+
+    def _tray_task_callback(self, task_name: str):
+        """Return a pystray-compatible callback that starts *task_name*."""
+        def callback(_icon, _item) -> None:
+            self.root.after(0, lambda: self._start_task_by_name(task_name))
+        return callback
+
+    def _build_tray_menu(self):
+        """Build a pystray Menu reflecting the current task list."""
+        import pystray
+
+        tasks = self.task_config.tasks
+        if tasks:
+            task_items = tuple(
+                pystray.MenuItem(task, self._tray_task_callback(task))
+                for task in tasks
+            )
+            task_submenu = pystray.Menu(*task_items)
+        else:
+            task_submenu = pystray.Menu(
+                pystray.MenuItem("(業務未設定)", None, enabled=False)
+            )
+
+        return pystray.Menu(
+            pystray.MenuItem(
+                "ウィンドウを表示",
+                lambda _icon, _item: self.root.after(0, self._show_window),
+                default=True,
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "始業",
+                lambda _icon, _item: self.root.after(0, self._record_start),
+            ),
+            pystray.MenuItem(
+                "終業",
+                lambda _icon, _item: self.root.after(0, self._record_end),
+            ),
+            pystray.MenuItem("個別業務", task_submenu),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "アプリ終了",
+                lambda _icon, _item: self._quit_app(),
+            ),
+        )
+
+    def _start_tray(self) -> None:
+        """Start the system tray icon in a background daemon thread (best-effort)."""
+        try:
+            import pystray  # presence check
+
+            icon_image = self._create_tray_icon_image()
+            menu = self._build_tray_menu()
+            self.tray_icon = pystray.Icon(
+                "attendance_management",
+                icon_image,
+                "勤怠管理",
+                menu,
+            )
+            threading.Thread(target=self.tray_icon.run, daemon=True).start()
+            logger.info("system tray started")
+        except Exception as exc:
+            logger.warning("system tray unavailable: %s", exc)
+
+    def _restart_tray(self) -> None:
+        """Stop the existing tray icon and create a new one (e.g. after folder change)."""
+        if self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+            self.tray_icon = None
+        self._start_tray()
 
 
 # ---------------------------------------------------------------------------
