@@ -16,6 +16,7 @@ from datetime import date, datetime, time
 from typing import Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 from app_logger import get_logger
 
 HEADERS = ["日付", "始業時間", "終業時間", "労働時間"]
@@ -27,8 +28,9 @@ logger = get_logger()
 class AttendanceManager:
     """Reads and writes attendance data to Excel files."""
 
-    def __init__(self, config) -> None:
+    def __init__(self, config, task_session_manager=None) -> None:
         self.config = config
+        self.task_session_manager = task_session_manager
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -411,7 +413,7 @@ class AttendanceManager:
         if ws.max_row > 1:
             ws.delete_rows(2, ws.max_row - 1)
 
-        # Write sorted data
+        # Write sorted data (cols A–D)
         for idx, row in enumerate(data, start=2):
             ws.cell(row=idx, column=1, value=row[0])
             ws.cell(row=idx, column=2, value=row[1])
@@ -422,10 +424,54 @@ class AttendanceManager:
             ws.cell(row=idx, column=2).number_format = "hh:mm"
             ws.cell(row=idx, column=3).number_format = "hh:mm"
 
-        # Add total row if every calendar day in the month has a record
+        # ── Task columns (E+) ─────────────────────────────────────────────
+        # Clear existing task column headers from row 1 (cols 5+)
+        col_idx = 5
+        while ws.cell(row=1, column=col_idx).value is not None:
+            ws.cell(row=1, column=col_idx).value = None
+            col_idx += 1
+
+        tasks_for_month: list = []
+        if self.task_session_manager is not None:
+            tasks_for_month = self.task_session_manager.get_first_occurrence_for_month(
+                year, month
+            )
+
+        if tasks_for_month:
+            task_col_map = {task: 5 + i for i, task in enumerate(tasks_for_month)}
+
+            # Write task header row (row 1, cols E+)
+            for task, col in task_col_map.items():
+                col_letter = get_column_letter(col)
+                ws.cell(row=1, column=col, value=task)
+                ws.column_dimensions[col_letter].width = 12
+
+            # Write task duration data for each date row
+            for data_idx, row in enumerate(data, start=2):
+                date_str = row[0]
+                if not date_str:
+                    continue
+                durations = self.task_session_manager.get_task_durations_for_date(date_str)
+                for task, col in task_col_map.items():
+                    dur = durations.get(task, 0.0)
+                    if dur > 0.0:
+                        cell = ws.cell(row=data_idx, column=col, value=dur)
+                        cell.number_format = "[h]:mm"
+
+        # ── Total row ────────────────────────────────────────────────────
         last_day = calendar.monthrange(year, month)[1]
         if len(data) == last_day:
             total_row = len(data) + 2
             ws.cell(row=total_row, column=1, value="合計")
             ws.cell(row=total_row, column=4, value=f"=SUM(D2:D{total_row - 1})")
             ws.cell(row=total_row, column=4).number_format = "[h]:mm"
+            if tasks_for_month:
+                for i, task in enumerate(tasks_for_month):
+                    col = 5 + i
+                    col_letter = get_column_letter(col)
+                    ws.cell(
+                        row=total_row,
+                        column=col,
+                        value=f"=SUM({col_letter}2:{col_letter}{total_row - 1})",
+                    )
+                    ws.cell(row=total_row, column=col).number_format = "[h]:mm"
