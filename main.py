@@ -14,7 +14,9 @@ Layout
   Row 8: [業務 label] [task dropdown] [作業開始 button]
 """
 
+import atexit
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -563,12 +565,95 @@ class AttendanceApp:
 
 
 # ---------------------------------------------------------------------------
+# Single-instance enforcement
+# ---------------------------------------------------------------------------
+
+# Arbitrary local port used to detect and signal an already-running instance.
+# Only loopback (127.0.0.1) is used, so no network exposure occurs.
+# The value can be overridden via the ATTENDANCE_INSTANCE_PORT environment
+# variable if port 47832 happens to be occupied by another application.
+_INSTANCE_PORT_DEFAULT = 47832
+try:
+    _INSTANCE_PORT = int(os.environ.get("ATTENDANCE_INSTANCE_PORT", _INSTANCE_PORT_DEFAULT))
+except ValueError:
+    logger.warning(
+        "ATTENDANCE_INSTANCE_PORT is not a valid integer; using default port %d",
+        _INSTANCE_PORT_DEFAULT,
+    )
+    _INSTANCE_PORT = _INSTANCE_PORT_DEFAULT
+# How long (seconds) to wait when probing for an already-running instance.
+_INSTANCE_CHECK_TIMEOUT_SEC = 0.5
+# Maximum number of pending connections accepted by the instance server socket.
+_INSTANCE_SERVER_BACKLOG = 5
+
+
+def _start_instance_server(root: tk.Tk) -> None:
+    """Bind a local TCP port and listen for focus requests from duplicate launches.
+
+    When a second instance of the application starts, it connects to this port.
+    On receiving a connection the first instance brings its window to the foreground.
+    The listener runs in a daemon thread and is terminated automatically on exit.
+    The server socket is registered with atexit to ensure it is closed on normal exit.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(("127.0.0.1", _INSTANCE_PORT))
+        server.listen(_INSTANCE_SERVER_BACKLOG)
+    except OSError as exc:
+        # Could not bind (e.g. port occupied by another process).
+        # Single-instance protection is skipped; the app still runs normally.
+        logger.warning("single-instance server could not bind port %d: %s", _INSTANCE_PORT, exc)
+        server.close()
+        return
+
+    # Ensure the socket is closed when the process exits normally so the port
+    # is released promptly and subsequent launches are not blocked.
+    atexit.register(server.close)
+
+    def _bring_to_front() -> None:
+        """Restore and focus the main window (must be called on the Tk thread)."""
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+
+    def _listen() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+                conn.close()
+                root.after(0, _bring_to_front)
+            except OSError:
+                # Server socket was closed (application exiting); stop the loop.
+                break
+            except Exception:
+                # Stop the listener on any unexpected error to avoid a runaway loop.
+                logger.exception("instance server listener encountered an unexpected error; stopping")
+                break
+
+    threading.Thread(target=_listen, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
+    # Single-instance guard: try to connect to a port that a running instance is
+    # listening on.  If the connection succeeds the existing instance will bring
+    # its window to the front; this process then exits without opening a window.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
+            s.connect(("127.0.0.1", _INSTANCE_PORT))
+        # Connection succeeded – another instance is already running.
+        return
+    except OSError:
+        pass  # No existing instance found; proceed with normal startup.
+
     root = tk.Tk()
+    _start_instance_server(root)
     AttendanceApp(root)
     root.mainloop()
 
