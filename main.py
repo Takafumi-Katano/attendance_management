@@ -454,8 +454,10 @@ class AttendanceApp:
         """Hide the main window to the system tray instead of destroying it."""
         self._hide_to_tray()
 
-    def _on_window_unmap(self, _event) -> None:
+    def _on_window_unmap(self, event) -> None:
         """When minimized, hide from taskbar and keep running in tray."""
+        if event.widget is not self.root:
+            return
         if self.tray_icon is None:
             return
         if self._is_hiding_to_tray:
@@ -618,6 +620,7 @@ def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
         try:
             chunk = sock.recv(size - received)
         except socket.timeout:
+            logger.warning("single-instance socket receive timed out")
             return None
         if not chunk:
             return None
@@ -664,7 +667,10 @@ def _start_instance_server(root: tk.Tk) -> None:
                     conn.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
                     payload = _recv_exact(conn, len(_INSTANCE_SIGNAL))
                     if payload != _INSTANCE_SIGNAL:
-                        logger.warning("instance server received unexpected signal payload")
+                        logger.warning(
+                            "instance server received unexpected signal payload: bytes=%s",
+                            len(payload) if payload is not None else 0,
+                        )
                         continue
                     conn.sendall(_INSTANCE_ACK)
                 root.after(0, _bring_to_front)
