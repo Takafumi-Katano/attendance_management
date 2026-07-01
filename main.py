@@ -23,6 +23,7 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
+from typing import Optional
 
 from app_logger import get_log_path, get_logger, set_log_directory
 from config import Config
@@ -60,10 +61,13 @@ class AttendanceApp:
 
         # System tray (best-effort; ignored if pystray/Pillow not available)
         self.tray_icon = None
+        self._is_hiding_to_tray = False
         self._start_tray()
 
         # Hide window on close → keep residing in the system tray
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        # Hide window on minimize as well (keep only tray presence)
+        self.root.bind("<Unmap>", self._on_window_unmap)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -448,7 +452,26 @@ class AttendanceApp:
 
     def _on_window_close(self) -> None:
         """Hide the main window to the system tray instead of destroying it."""
+        self._hide_to_tray()
+
+    def _on_window_unmap(self, event) -> None:
+        """When minimized, hide from taskbar and keep running in tray."""
+        if event.widget is not self.root:
+            return
+        if self.tray_icon is None:
+            return
+        if self._is_hiding_to_tray:
+            return
+        if self.root.state() == "iconic":
+            self.root.after(0, self._hide_to_tray)
+
+    def _hide_to_tray(self) -> None:
+        self._is_hiding_to_tray = True
         self.root.withdraw()
+        self.root.after_idle(self._clear_hide_to_tray_flag)
+
+    def _clear_hide_to_tray_flag(self) -> None:
+        self._is_hiding_to_tray = False
 
     def _show_window(self) -> None:
         """Restore and focus the main window."""
@@ -585,6 +608,25 @@ except ValueError:
 _INSTANCE_CHECK_TIMEOUT_SEC = 0.5
 # Maximum number of pending connections accepted by the instance server socket.
 _INSTANCE_SERVER_BACKLOG = 5
+_INSTANCE_SIGNAL = b"attendance_management:show_window"
+_INSTANCE_ACK = b"attendance_management:ok"
+
+
+def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
+    """Receive exactly *size* bytes; return None if the stream closes early."""
+    chunks = []
+    received = 0
+    while received < size:
+        try:
+            chunk = sock.recv(size - received)
+        except socket.timeout:
+            logger.warning("single-instance socket receive timed out")
+            return None
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        received += len(chunk)
+    return b"".join(chunks)
 
 
 def _start_instance_server(root: tk.Tk) -> None:
@@ -621,7 +663,16 @@ def _start_instance_server(root: tk.Tk) -> None:
         while True:
             try:
                 conn, _ = server.accept()
-                conn.close()
+                with conn:
+                    conn.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
+                    payload = _recv_exact(conn, len(_INSTANCE_SIGNAL))
+                    if payload != _INSTANCE_SIGNAL:
+                        logger.warning(
+                            "instance server received unexpected signal payload: bytes=%s",
+                            len(payload) if payload is not None else 0,
+                        )
+                        continue
+                    conn.sendall(_INSTANCE_ACK)
                 root.after(0, _bring_to_front)
             except OSError:
                 # Server socket was closed (application exiting); stop the loop.
@@ -647,8 +698,11 @@ def main() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
             s.connect(("127.0.0.1", _INSTANCE_PORT))
-        # Connection succeeded – another instance is already running.
-        return
+            s.sendall(_INSTANCE_SIGNAL)
+            if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
+                # Connection succeeded to our existing app instance.
+                return
+            logger.warning("single-instance handshake failed: unexpected acknowledgment")
     except OSError:
         pass  # No existing instance found; proceed with normal startup.
 
