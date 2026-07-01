@@ -615,7 +615,10 @@ def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
     chunks = []
     received = 0
     while received < size:
-        chunk = sock.recv(size - received)
+        try:
+            chunk = sock.recv(size - received)
+        except socket.timeout:
+            return None
         if not chunk:
             return None
         chunks.append(chunk)
@@ -661,6 +664,7 @@ def _start_instance_server(root: tk.Tk) -> None:
                     conn.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
                     payload = _recv_exact(conn, len(_INSTANCE_SIGNAL))
                     if payload != _INSTANCE_SIGNAL:
+                        logger.warning("instance server received unexpected signal payload")
                         continue
                     conn.sendall(_INSTANCE_ACK)
                 root.after(0, _bring_to_front)
@@ -692,6 +696,7 @@ def main() -> None:
             if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
                 # Connection succeeded to our existing app instance.
                 return
+            logger.warning("single-instance handshake failed: unexpected acknowledgment")
     except OSError:
         pass  # No existing instance found; proceed with normal startup.
 
