@@ -454,6 +454,8 @@ class AttendanceApp:
 
     def _on_window_unmap(self, _event) -> None:
         """When minimized, hide from taskbar and keep running in tray."""
+        if self.tray_icon is None:
+            return
         if self.root.state() == "iconic":
             self.root.after(0, self.root.withdraw)
 
@@ -664,7 +666,6 @@ def main() -> None:
             if s.recv(len(_INSTANCE_ACK)) == _INSTANCE_ACK:
                 # Connection succeeded to our existing app instance.
                 return
-        # Connection succeeded – another instance is already running.
     except OSError:
         pass  # No existing instance found; proceed with normal startup.
 
