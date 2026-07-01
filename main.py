@@ -60,6 +60,7 @@ class AttendanceApp:
 
         # System tray (best-effort; ignored if pystray/Pillow not available)
         self.tray_icon = None
+        self._is_hiding_to_tray = False
         self._start_tray()
 
         # Hide window on close → keep residing in the system tray
@@ -450,14 +451,24 @@ class AttendanceApp:
 
     def _on_window_close(self) -> None:
         """Hide the main window to the system tray instead of destroying it."""
-        self.root.withdraw()
+        self._hide_to_tray()
 
     def _on_window_unmap(self, _event) -> None:
         """When minimized, hide from taskbar and keep running in tray."""
         if self.tray_icon is None:
             return
+        if self._is_hiding_to_tray:
+            return
         if self.root.state() == "iconic":
-            self.root.after(0, self.root.withdraw)
+            self.root.after(0, self._hide_to_tray)
+
+    def _hide_to_tray(self) -> None:
+        self._is_hiding_to_tray = True
+        self.root.withdraw()
+        self.root.after_idle(self._clear_hide_to_tray_flag)
+
+    def _clear_hide_to_tray_flag(self) -> None:
+        self._is_hiding_to_tray = False
 
     def _show_window(self) -> None:
         """Restore and focus the main window."""
@@ -598,6 +609,19 @@ _INSTANCE_SIGNAL = b"attendance_management:show_window"
 _INSTANCE_ACK = b"attendance_management:ok"
 
 
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    """Receive exactly *size* bytes unless the peer closes the socket."""
+    chunks = []
+    received = 0
+    while received < size:
+        chunk = sock.recv(size - received)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        received += len(chunk)
+    return b"".join(chunks)
+
+
 def _start_instance_server(root: tk.Tk) -> None:
     """Bind a local TCP port and listen for focus requests from duplicate launches.
 
@@ -633,7 +657,7 @@ def _start_instance_server(root: tk.Tk) -> None:
             try:
                 conn, _ = server.accept()
                 with conn:
-                    payload = conn.recv(len(_INSTANCE_SIGNAL))
+                    payload = _recv_exact(conn, len(_INSTANCE_SIGNAL))
                     if payload != _INSTANCE_SIGNAL:
                         continue
                     conn.sendall(_INSTANCE_ACK)
@@ -663,7 +687,7 @@ def main() -> None:
             s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
             s.connect(("127.0.0.1", _INSTANCE_PORT))
             s.sendall(_INSTANCE_SIGNAL)
-            if s.recv(len(_INSTANCE_ACK)) == _INSTANCE_ACK:
+            if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
                 # Connection succeeded to our existing app instance.
                 return
     except OSError:
