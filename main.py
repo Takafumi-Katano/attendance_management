@@ -64,6 +64,8 @@ class AttendanceApp:
 
         # Hide window on close → keep residing in the system tray
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        # Hide window on minimize as well (keep only tray presence)
+        self.root.bind("<Unmap>", self._on_window_unmap)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -450,6 +452,11 @@ class AttendanceApp:
         """Hide the main window to the system tray instead of destroying it."""
         self.root.withdraw()
 
+    def _on_window_unmap(self, _event) -> None:
+        """When minimized, hide from taskbar and keep running in tray."""
+        if self.root.state() == "iconic":
+            self.root.after(0, self.root.withdraw)
+
     def _show_window(self) -> None:
         """Restore and focus the main window."""
         self.root.deiconify()
@@ -585,6 +592,8 @@ except ValueError:
 _INSTANCE_CHECK_TIMEOUT_SEC = 0.5
 # Maximum number of pending connections accepted by the instance server socket.
 _INSTANCE_SERVER_BACKLOG = 5
+_INSTANCE_SIGNAL = b"attendance_management:show_window"
+_INSTANCE_ACK = b"attendance_management:ok"
 
 
 def _start_instance_server(root: tk.Tk) -> None:
@@ -621,7 +630,11 @@ def _start_instance_server(root: tk.Tk) -> None:
         while True:
             try:
                 conn, _ = server.accept()
-                conn.close()
+                with conn:
+                    payload = conn.recv(len(_INSTANCE_SIGNAL))
+                    if payload != _INSTANCE_SIGNAL:
+                        continue
+                    conn.sendall(_INSTANCE_ACK)
                 root.after(0, _bring_to_front)
             except OSError:
                 # Server socket was closed (application exiting); stop the loop.
@@ -647,8 +660,11 @@ def main() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
             s.connect(("127.0.0.1", _INSTANCE_PORT))
+            s.sendall(_INSTANCE_SIGNAL)
+            if s.recv(len(_INSTANCE_ACK)) == _INSTANCE_ACK:
+                # Connection succeeded to our existing app instance.
+                return
         # Connection succeeded – another instance is already running.
-        return
     except OSError:
         pass  # No existing instance found; proceed with normal startup.
 
