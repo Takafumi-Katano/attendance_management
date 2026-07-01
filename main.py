@@ -23,6 +23,7 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
+from typing import Optional
 
 from app_logger import get_log_path, get_logger, set_log_directory
 from config import Config
@@ -609,14 +610,14 @@ _INSTANCE_SIGNAL = b"attendance_management:show_window"
 _INSTANCE_ACK = b"attendance_management:ok"
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
-    """Receive exactly *size* bytes unless the peer closes the socket."""
+def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
+    """Receive exactly *size* bytes; return None if the stream closes early."""
     chunks = []
     received = 0
     while received < size:
         chunk = sock.recv(size - received)
         if not chunk:
-            break
+            return None
         chunks.append(chunk)
         received += len(chunk)
     return b"".join(chunks)
@@ -657,6 +658,7 @@ def _start_instance_server(root: tk.Tk) -> None:
             try:
                 conn, _ = server.accept()
                 with conn:
+                    conn.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
                     payload = _recv_exact(conn, len(_INSTANCE_SIGNAL))
                     if payload != _INSTANCE_SIGNAL:
                         continue
