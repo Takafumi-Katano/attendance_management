@@ -639,11 +639,16 @@ def _notify_existing_instance() -> bool:
             s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
             s.connect(("127.0.0.1", _INSTANCE_PORT))
             s.sendall(_INSTANCE_SIGNAL)
-            if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
+            ack = _recv_exact(s, len(_INSTANCE_ACK))
+            if ack == _INSTANCE_ACK:
                 return True
-            logger.warning(
-                "single-instance handshake failed: received unexpected response instead of acknowledgment"
-            )
+            if ack is None:
+                logger.warning("single-instance handshake failed: no acknowledgment received")
+            else:
+                logger.warning(
+                    "single-instance handshake failed: unexpected acknowledgment payload=%s",
+                    ack.hex(),
+                )
     except OSError:
         pass
     return False
@@ -729,6 +734,10 @@ def main() -> None:
         # listening between the initial probe and this bind attempt.
         if _notify_existing_instance():
             return
+        logger.warning(
+            "single-instance guard unavailable: proceeding without instance server on port %d",
+            _INSTANCE_PORT,
+        )
 
     root = tk.Tk()
     if server is not None:
