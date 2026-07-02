@@ -629,25 +629,43 @@ def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
     return b"".join(chunks)
 
 
-def _start_instance_server(root: tk.Tk) -> None:
-    """Bind a local TCP port and listen for focus requests from duplicate launches.
+def _notify_existing_instance() -> bool:
+    """Signal an existing instance to show its window; return True if acknowledged."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
+            s.connect(("127.0.0.1", _INSTANCE_PORT))
+            s.sendall(_INSTANCE_SIGNAL)
+            if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
+                return True
+            logger.warning("single-instance handshake failed: unexpected acknowledgment")
+    except OSError:
+        pass
+    return False
 
-    When a second instance of the application starts, it connects to this port.
-    On receiving a connection the first instance brings its window to the foreground.
-    The listener runs in a daemon thread and is terminated automatically on exit.
-    The server socket is registered with atexit to ensure it is closed on normal exit.
-    """
+
+def _try_bind_instance_server() -> Optional[socket.socket]:
+    """Create and bind the single-instance server socket, or return None on failure."""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server.bind(("127.0.0.1", _INSTANCE_PORT))
         server.listen(_INSTANCE_SERVER_BACKLOG)
     except OSError as exc:
-        # Could not bind (e.g. port occupied by another process).
-        # Single-instance protection is skipped; the app still runs normally.
         logger.warning("single-instance server could not bind port %d: %s", _INSTANCE_PORT, exc)
         server.close()
-        return
+        return None
+    return server
+
+
+def _start_instance_server(root: tk.Tk, server: socket.socket) -> None:
+    """Start listening for focus requests from duplicate launches.
+
+    When a second instance of the application starts, it connects to this port.
+    On receiving a connection the first instance brings its window to the foreground.
+    The listener runs in a daemon thread and is terminated automatically on exit.
+    The server socket is registered with atexit to ensure it is closed on normal exit.
+    """
 
     # Ensure the socket is closed when the process exits normally so the port
     # is released promptly and subsequent launches are not blocked.
@@ -694,20 +712,19 @@ def main() -> None:
     # Single-instance guard: try to connect to a port that a running instance is
     # listening on.  If the connection succeeds the existing instance will bring
     # its window to the front; this process then exits without opening a window.
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
-            s.connect(("127.0.0.1", _INSTANCE_PORT))
-            s.sendall(_INSTANCE_SIGNAL)
-            if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
-                # Connection succeeded to our existing app instance.
-                return
-            logger.warning("single-instance handshake failed: unexpected acknowledgment")
-    except OSError:
-        pass  # No existing instance found; proceed with normal startup.
+    if _notify_existing_instance():
+        return
+
+    server = _try_bind_instance_server()
+    if server is None:
+        # Handle startup race: another instance may have just bound and started
+        # listening between the initial probe and this bind attempt.
+        if _notify_existing_instance():
+            return
 
     root = tk.Tk()
-    _start_instance_server(root)
+    if server is not None:
+        _start_instance_server(root, server)
     AttendanceApp(root)
     root.mainloop()
 
