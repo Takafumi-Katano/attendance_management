@@ -630,7 +630,10 @@ def _recv_exact(sock: socket.socket, size: int) -> Optional[bytes]:
 
 
 def _notify_existing_instance() -> bool:
-    """Signal an existing instance to show its window; return True if acknowledged."""
+    """Signal an existing instance to show its window.
+
+    Returns True if an existing instance acknowledged the signal, False otherwise.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(_INSTANCE_CHECK_TIMEOUT_SEC)
@@ -638,14 +641,19 @@ def _notify_existing_instance() -> bool:
             s.sendall(_INSTANCE_SIGNAL)
             if _recv_exact(s, len(_INSTANCE_ACK)) == _INSTANCE_ACK:
                 return True
-            logger.warning("single-instance handshake failed: unexpected acknowledgment")
+            logger.warning(
+                "single-instance handshake failed: received unexpected response instead of acknowledgment"
+            )
     except OSError:
         pass
     return False
 
 
 def _try_bind_instance_server() -> Optional[socket.socket]:
-    """Create and bind the single-instance server socket, or return None on failure."""
+    """Create and bind the single-instance server socket.
+
+    Returns the bound socket on success, or None if the port is in use or bind fails.
+    """
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
